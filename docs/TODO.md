@@ -132,10 +132,26 @@ Make it feel collaborative and production-ready.
 
 | Phase   | Tasks | Done |
 | ------- | ----- | ---- |
+## Phase 7 — Detailed Documentation
+
+- [x] **#23 — Create `docs/ARCHITECTURE.md`**
+  - Documented the mathematical model of the Replicated Growable Array, and the physical monorepo boundaries tying it to React and Node.
+- [x] **#24 — Create `docs/DATAFLOW.md`**
+  - Formulated the stepwise lifecycle of Local Inserts, Remote Ingestion flows, and Out-Of-Order Eventual Consistency catches for async tombstones.
+- [x] **#25 — Create `docs/TECH_STACK.md`**
+  - Documented the logic behind choosing Vite, Monaco, generic WS, and raw native TypeScript over external OT libraries or Socket.io.
+
+---
+
+## Progress Summary
+
+| Phase   | Tasks | Done |
+| ------- | ----- | ---- |
 | Phase 1 | 7     | 7    |
 | Phase 2 | 2     | 2    |
 | Phase 3 | 3     | 3    |
 | Phase 4 | 2     | 2    |
 | Phase 5 | 4     | 4    |
 | Phase 6 | 4     | 4    |
-| **Total** | **22** | **22** |
+| Phase 7 | 3     | 3    |
+| **Total** | **25** | **25** |
