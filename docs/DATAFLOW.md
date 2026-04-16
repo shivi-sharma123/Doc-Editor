@@ -1,48 +1,176 @@
-# Dataflows and Synchronization
+# Dataflows and Critical Runtime Paths
 
-This document explains the step-by-step lifecycles of operations as they travel through the Collaborative Editor.
+This document focuses on the operational flows through the system. For package responsibilities and structural boundaries, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
----
+## 1. Message Types
 
-## 📥 1. Local Insert Flow
+The running system exchanges four message classes:
 
-When a user types directly into their Monaco Editor window:
+| Message | Sender | Receiver | Persisted | Purpose |
+| --- | --- | --- | --- | --- |
+| `insert` | client | server, then peer clients | yes, inside room snapshot | Add one character after a parent |
+| `delete` | client | server, then peer clients | yes, inside room snapshot | Tombstone one character |
+| `sync` | server | newly connected client | no | Send current full sequence |
+| `cursor` | client | peer clients via server | no | Broadcast ephemeral presence |
 
-1. **Monaco Event:** The `onChange` event in Monaco detects an insertion payload.
-2. **Editor API:** `Editor.tsx` intercepts the row/column offset and genericizes it to a flat `index` (e.g., character 45).
-3. **CRDT Generation:** It calls `localInsert(index, "A")` inside `useCrdt.ts`.
-4. **CRDT Core Validation:** Within `@crdts/crdt-core/rga.ts`, the engine looks up the character currently at index 44 to establish it as the **parent** associated with this new character.
-5. **Clock Bump:** The local logical clock ticks up `+1`. The new character is minted as a `CRDTChar` with a unique `CharId`.
-6. **Network Dispatch:** The operation `{ type: 'insert', id: CharId, parentId: CharId, value: "A" }` is forwarded to `useWebSocket.ts`.
-7. **WebSocket:** The JSON payload is sent over the wire to `ws://localhost:3001/:docId`.
+## 2. Local Insert Flow
 
-## 📤 2. Remote Synchronization Flow
+```mermaid
+sequenceDiagram
+    participant User
+    participant Monaco
+    participant Editor
+    participant useCrdt
+    participant RGA
+    participant WS
+    participant Room
 
-When the server broadcasts User A's edit to User B:
+    User->>Monaco: Type character
+    Monaco->>Editor: onChange(change)
+    Editor->>useCrdt: localInsert(index, value)
+    useCrdt->>RGA: localInsert
+    RGA-->>useCrdt: InsertOp
+    useCrdt-->>Editor: InsertOp
+    Editor->>WS: sendOp(op)
+    WS->>Room: JSON message
+```
 
-1. **WebSocket Relay:** The Node.js server receives the JSON insert operation and `ws.send`s it to every client socket mapped to `room.clients` except the sender.
-2. **Client Ingestion:** User B's `useWebSocket.ts` receives the message and triggers the `onRemoteOp` callback.
-3. **CRDT Core Application:** The operation is passed to `RGA.applyRemote(op)` in `@crdts/crdt-core`.
-4. **Parent Resolution:** The CRDT searches for the `parentId`. 
-    - *Happy Path:* It finds the parent, resolves sibling determinism, and splices the payload precisely into the local `this.sequence` array.
-    - *Missing Parent (Out-of-Order):* The client buffers the operation into `insertBacklog`. It remains invisible until the latency packet containing its parent arrives.
-5. **Event Emission:** The CRDT core determines the *visible index* resulting from the math and returns a `RemoteOperationEvent`.
-6. **Monaco UI Render:** Instead of doing a destructive `setValue()`, the `Editor.tsx` script uses Monaco's `executeEdits('remote')` API to surgically inject the character into User B's text buffer without ripping their native cursor position away!
+Details:
 
-## 👻 3. Deletions and Tombstoning Flow
+- The visible index from Monaco is converted directly into CRDT insertion position.
+- The local replica updates first, so the user sees the character before the network round-trip completes.
+- Multi-character input is sent as one operation per character.
 
-CRDTs do not delete data—they flag it.
+## 3. Local Delete Flow
 
-1. **Local Delete:** User A presses backspace at index 45. The CRDT engine locates the target `CharId`, flips `char.tombstone = true`, and emits a delete operation.
-2. **Remote Ingestion:** User B receives the `{ type: 'delete', id: CharId }` payload.
-3. **Ghost Deletes (Out-of-Order):** What happens if User B receives the *Delete* payload before they receive the *Insert* payload due to an asynchronous hiccup?
-    - `rga.ts` fails to find the target `CharId`.
-    - Instead of throwing an error, it drops the `CharId` into a `tombstoneCache` `Set`.
-4. **Resolution:** When the original Insert payload finally arrives at User B, `applyInsert()` checks the `tombstoneCache`. It sees the ID, inserts the character, but immediately forces its target flag to `tombstone: true`, preventing a momentary flicker in the editor!
+```mermaid
+sequenceDiagram
+    participant User
+    participant Monaco
+    participant Editor
+    participant useCrdt
+    participant RGA
+    participant WS
 
-## 🔌 4. Initialization / Catch-Up Flow
+    User->>Monaco: Backspace / delete range
+    Monaco->>Editor: onChange(change)
+    loop each deleted character
+        Editor->>useCrdt: localDelete(index)
+        useCrdt->>RGA: localDelete
+        RGA-->>useCrdt: DeleteOp
+        useCrdt-->>Editor: DeleteOp
+        Editor->>WS: sendOp(op)
+    end
+```
 
-1. **Connection:** When a generic Client first opens `http://localhost:5173/doc123`, a WebSocket upgrade request occurs.
-2. **Hydration Sync:** The Server intercepts the connection and fetches the entirety of `room.sequence` (the raw CRDT character array) from the SQLite DB.
-3. **Dispatch:** The server fires a `{ type: 'sync', sequence: [...] }` payload exclusively to the new client.
-4. **Bootstrapping:** The client's `useCrdt.ts` fires `initFromSequence()`, entirely overriding its local RAM sequence and aligning its `logicalClock` to the highest observed value across the entire payload. The Monaco editor mounts the visible text and standard real-time collaboration begins.
+Details:
+
+- Deletes are represented as tombstones, not structural removal.
+- Range deletes become repeated single-character delete operations at the same visible index.
+
+## 4. Server Fan-Out Flow
+
+```mermaid
+sequenceDiagram
+    participant Sender as Sending Client
+    participant Room as DocumentRoom
+    participant DB as SQLite
+    participant Peer as Peer Client
+
+    Sender->>Room: insert/delete
+    Room->>Room: rga.applyRemote(op)
+    Room->>DB: saveDocument(id, rga)
+    Room-->>Peer: same op payload
+```
+
+Details:
+
+- The sender does not receive its own operation back.
+- The room replica is updated before persistence and broadcast complete.
+- Cursor messages skip CRDT application and persistence and are only forwarded.
+
+## 5. Join and Reconnect Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Hook as useWebSocket
+    participant Room
+    participant CRDT as useCrdt
+    participant Monaco
+
+    Client->>Hook: mount editor for docId
+    Hook->>Room: open WebSocket
+    Room-->>Hook: sync(sequence)
+    Hook->>CRDT: initFromSequence(sequence)
+    CRDT-->>Monaco: text snapshot
+```
+
+Details:
+
+- `useWebSocket` reconnects with exponential backoff up to 10 seconds.
+- On reconnect, the client expects a fresh `sync` payload and rehydrates from room state.
+- Initial editor population uses `setValue()` only for the first sync path; incremental remote updates use Monaco deltas.
+
+## 6. Out-of-Order Dependency Resolution
+
+The CRDT core contains two mechanisms that protect convergence when messages arrive out of order.
+
+### Insert Backlog
+
+If an insert arrives before its `parentId` exists locally:
+
+1. The insert is pushed into `insertBacklog`.
+2. No editor event is emitted yet.
+3. When the parent eventually arrives, backlog processing retries pending inserts.
+
+### Tombstone Cache
+
+If a delete arrives before its target character exists locally:
+
+1. The deleted `CharId` is stored in `tombstoneCache`.
+2. When the matching insert later arrives, the char is inserted already tombstoned.
+3. No visible flicker occurs because no insert event is emitted first.
+
+## 7. Persistence Flow
+
+The persistence path is snapshot-oriented:
+
+1. Room state changes after every insert/delete.
+2. The server serializes `siteId`, `clock`, and `sequence`.
+3. SQLite upserts the full JSON blob into `documents`.
+
+Implications:
+
+- Persistence is simple and restart-safe.
+- Large documents increase write cost because the full sequence is rewritten each time.
+
+## 8. Critical Failure Boundaries
+
+These are the main places where system behavior depends on careful handling:
+
+### Editor-to-CRDT Boundary
+
+If Monaco offsets and CRDT visible indexes diverge, local operations will target the wrong characters.
+
+### CRDT-to-WebSocket Boundary
+
+If operations are malformed or missing causal identifiers, replicas cannot converge.
+
+### Room-to-Storage Boundary
+
+If persistence fails, collaboration can still continue in memory, but restart recovery will lose recent state.
+
+### Sync Boundary
+
+If the initial `sync` payload is stale or incomplete, newly joined clients will start from the wrong replica state and may diverge until corrected.
+
+## 9. Highest-Value Observability Points
+
+If you instrument this system later, these points will tell you the most:
+
+1. Time from Monaco local change to WebSocket send.
+2. Time from server receive to peer broadcast.
+3. SQLite write duration and failure rate.
+4. Backlog size and tombstone-cache hits in the CRDT core.
+5. Room count, room size, and client count per room.
