@@ -1,6 +1,8 @@
+NOTE: Source Code to be added soon
+
 # Doc-Editor
 
-# Collaborative Document Editor using CRDTs
+## Collaborative Document Editor using CRDTs
 
 A real-time collaborative document editor where multiple users can simultaneously edit the same document without conflicts. The system uses **CRDTs (Conflict-free Replicated Data Types)** to guarantee eventual consistency — every user sees the same final document regardless of network delays, partitions, or edit ordering.
 
