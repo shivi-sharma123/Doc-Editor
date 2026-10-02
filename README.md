@@ -36,15 +36,15 @@ A real-time collaborative document editor where multiple users can simultaneousl
 └──────────────────────────────────────────────────────────┘
 ```
 
-| Layer        | Technology     | Purpose                                              |
-| ------------ | -------------- | ---------------------------------------------------- |
-| **Frontend** | React + Vite   | Fast dev experience, component model                 |
-| **Editor**   | Monaco Editor  | Battle-tested, rich API for programmatic text control |
-| **Data Type**| Custom CRDT    | RGA Sequence CRDT built from scratch (no dependencies)|
-| **Transport**| WebSocket (ws) | Low-latency bidirectional communication              |
-| **Backend**  | Node.js + Express | Simple HTTP + WebSocket server                    |
-| **Storage**  | SQLite         | Zero-config, persistent storage  |
-| **Language** | TypeScript     | Shared types between client and server               |
+| Layer         | Technology        | Purpose                                                |
+| ------------- | ----------------- | ------------------------------------------------------ |
+| **Frontend**  | React + Vite      | Fast dev experience, component model                   |
+| **Editor**    | Monaco Editor     | Battle-tested, rich API for programmatic text control  |
+| **Data Type** | Custom CRDT       | RGA Sequence CRDT built from scratch (no dependencies) |
+| **Transport** | WebSocket (ws)    | Low-latency bidirectional communication                |
+| **Backend**   | Node.js + Express | Simple HTTP + WebSocket server                         |
+| **Storage**   | SQLite            | Zero-config, persistent storage                        |
+| **Language**  | TypeScript        | Shared types between client and server                 |
 
 ---
 
@@ -89,20 +89,24 @@ crdts/
 ## 🛠 Getting Started
 
 ### Prerequisites
+
 - Node.js (v18+ recommended)
 - npm (v9+ recommended)
 
 ### Installation
 
 Install all monorepo dependencies from the root directory:
+
 ```bash
 npm install
 ```
-*(On macOS/Linux you can use `make install` instead.)*
+
+_(On macOS/Linux you can use `make install` instead.)_
 
 > **Windows note:** `npm` 11+ blocks dependency install scripts by default. This project needs
 > `esbuild` and `sqlite3` to run theirs. The repository already approves them via `allowScripts`
 > in the root `package.json`. If you ever hit a native-module error, run:
+>
 > ```bash
 > npm install-scripts approve esbuild sqlite3
 > npm rebuild sqlite3 esbuild
@@ -111,21 +115,25 @@ npm install
 ### Running the Application (Development)
 
 To run both the backend server and frontend client concurrently:
+
 ```bash
 npm run dev
 ```
+
 - The backend server will start on `http://localhost:3001`
 - The Vite frontend will start on `http://localhost:5173`
 
 To run them in separate terminals instead:
+
 ```bash
 npm run dev:server     # backend only
 npm run dev:client     # frontend only
 ```
 
-*(On macOS/Linux `make dev` is equivalent to `npm run dev`.)*
+_(On macOS/Linux `make dev` is equivalent to `npm run dev`.)_
 
 ### Testing the Collaboration Flow
+
 1. Open your browser to `http://localhost:5173`.
 2. Click **Create New Document** to initialize a new CRDT session. You will be redirected to an editing room.
 3. Open a second browser window (or an incognito tab) side-by-side and paste the exact same URL.
@@ -136,6 +144,7 @@ npm run dev:client     # frontend only
 ## 🧪 Testing
 
 The custom CRDT core (`@crdts/crdt-core`) has a comprehensive Jest test suite that guarantees algorithmic validity across a wide range of asynchronous scenarios, including:
+
 - Concurrent operations at identical positions.
 - Cross-insert-delete conflict resolutions.
 - Out-of-order dependency resolution (inserts arriving before their target parents).
@@ -143,6 +152,7 @@ The custom CRDT core (`@crdts/crdt-core`) has a comprehensive Jest test suite th
 - Multi-replica convergence assertions.
 
 Run the test suite:
+
 ```bash
 npm test
 ```
@@ -150,14 +160,17 @@ npm test
 ## 🏗 Building for Production
 
 To compile TypeScript and build the Vite frontend bundle across all workspaces:
+
 ```bash
 npm run build
 ```
 
 Then serve the compiled output:
+
 ```bash
 npm start
 ```
+
 - Backend (`node packages/server/dist/index.js`) on `http://localhost:3001`
 - Frontend (Vite preview of `packages/client/dist`) on `http://localhost:4173`
 
@@ -173,4 +186,3 @@ npm run lint
 - **`SQLITE_CANTOPEN` / `no such table: documents`:** Stop every running instance of the server, then delete `data.db` and restart.
 - **Blank page with "Loading editor…":** Monaco Editor is loaded from a CDN by `@monaco-editor/react`, so the first load needs an internet connection.
 - **Unexpected Document States:** The server persists document CRDT state in `data.db` in the monorepo root. To wipe testing data, run `npm run clean` (or `make clean`) and restart the server.
-
