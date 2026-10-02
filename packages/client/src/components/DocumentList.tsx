@@ -1,46 +1,120 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { FileText, Loader2, Plus, Radio, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
+interface DocumentSummary {
+    id: string;
+    clients: number;
+    length: number;
+}
+
+const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
+
 export function DocumentList() {
-    const [docs, setDocs] = useState<{ id: string; clients: number; length: number }[]>([]);
     const navigate = useNavigate();
 
-    useEffect(() => {
-        fetch('http://localhost:3001/documents')
-            .then(res => res.json())
-            .then(setDocs)
-            .catch(console.error);
+    const [documents, setDocuments] = useState<DocumentSummary[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [creating, setCreating] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const loadDocuments = useCallback(async () => {
+        try {
+            setError(null);
+            const response = await fetch(`${API_BASE}/documents`);
+            if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+            setDocuments(await response.json());
+        } catch (err) {
+            setError(
+                err instanceof Error
+                    ? err.message
+                    : 'Could not reach the collaboration server.'
+            );
+        } finally {
+            setLoading(false);
+        }
     }, []);
 
-    const createNewDoc = async () => {
+    useEffect(() => {
+        loadDocuments();
+        const timer = setInterval(loadDocuments, 4000);
+        return () => clearInterval(timer);
+    }, [loadDocuments]);
+
+    const createDocument = useCallback(async () => {
+        setCreating(true);
         try {
-            const res = await fetch('http://localhost:3001/documents', { method: 'POST' });
-            const { id } = await res.json();
+            setError(null);
+            const response = await fetch(`${API_BASE}/documents`, { method: 'POST' });
+            if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+            const { id } = await response.json();
             navigate(`/${id}`);
-        } catch (e) {
-            console.error(e);
+        } catch (err) {
+            setError(
+                err instanceof Error
+                    ? err.message
+                    : 'Could not reach the collaboration server.'
+            );
+            setCreating(false);
         }
-    };
+    }, [navigate]);
 
     return (
-        <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
-            <h1>CRDT Editor Rooms</h1>
-            <button onClick={createNewDoc} style={{ padding: '10px 20px', cursor: 'pointer', marginBottom: '20px' }}>
-                Create New Document
-            </button>
+        <div className="list-page">
+            <header className="list-header">
+                <div>
+                    <span className="list-eyebrow">
+                        <Radio size={14} />
+                        Conflict-free collaborative editor
+                    </span>
+                    <h1>Documents</h1>
+                    <p>
+                        Every room is an independent RGA replica set. Open one document in two
+                        windows and watch the edits converge without a central lock.
+                    </p>
+                </div>
 
-            <h2>Active Documents</h2>
-            <ul style={{ listStyle: 'none', padding: 0 }}>
-                {docs.map(doc => (
-                    <li key={doc.id} style={{ margin: '10px 0', border: '1px solid #ccc', padding: '10px' }}>
-                        <strong>{doc.id}</strong> - {doc.clients} users connected - {doc.length} characters
-                        <button onClick={() => navigate(`/${doc.id}`)} style={{ marginLeft: '10px' }}>
-                            Join
-                        </button>
-                    </li>
-                ))}
-                {docs.length === 0 && <p>No documents yet.</p>}
-            </ul>
+                <button className="primary-button" onClick={createDocument} disabled={creating}>
+                    {creating ? (
+                        <Loader2 className="spin" size={16} />
+                    ) : (
+                        <Plus size={16} />
+                    )}
+                    Create New Document
+                </button>
+            </header>
+
+            {error && <div className="list-error">{error}</div>}
+
+            {loading ? (
+                <div className="list-empty">
+                    <Loader2 className="spin" size={18} />
+                    Loading documents…
+                </div>
+            ) : documents.length === 0 ? (
+                <div className="list-empty">
+                    <FileText size={18} />
+                    No documents yet. Create one to start editing.
+                </div>
+            ) : (
+                <ul className="doc-grid">
+                    {documents.map((doc) => (
+                        <li key={doc.id}>
+                            <button className="doc-card" onClick={() => navigate(`/${doc.id}`)}>
+                                <FileText size={18} />
+                                <span className="doc-name">{doc.id}</span>
+                                <span className="doc-meta">
+                                    {doc.length} chars
+                                    <span className="doc-clients">
+                                        <Users size={13} />
+                                        {doc.clients}
+                                    </span>
+                                </span>
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
         </div>
     );
 }

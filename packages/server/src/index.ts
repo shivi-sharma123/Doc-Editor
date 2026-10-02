@@ -2,7 +2,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DocumentRoom } from './room';
-import { initStorage, loadDocument, getAllDocumentIds } from './storage';
+import { initStorage, loadDocument, getAllDocumentIds, closeStorage } from './storage';
 
 const app = express();
 app.use(express.json());
@@ -10,7 +10,7 @@ app.use(express.json());
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
-const PORT = 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
 // Maps document ID to room
 const rooms = new Map<string, DocumentRoom>();
@@ -69,7 +69,8 @@ wss.on('connection', (ws, req) => {
 
     ws.on('close', () => {
         room.removeClient(ws);
-        // Preserving state in memory since no DB yet
+        // Flush any debounced write so nothing is lost when the last client leaves.
+        room.flush();
     });
 });
 
@@ -88,6 +89,17 @@ initStorage().then(async () => {
     } catch (err) {
         console.error('Failed to load documents from storage:', err);
     }
+
+    const shutdown = async (signal: string) => {
+        console.log(`\nReceived ${signal}, flushing document state…`);
+        await Promise.all(Array.from(rooms.values(), (room) => room.flush()));
+        await closeStorage();
+        server.close(() => process.exit(0));
+        setTimeout(() => process.exit(0), 2000).unref();
+    };
+
+    process.on('SIGINT', () => void shutdown('SIGINT'));
+    process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
     server.listen(PORT, () => {
         console.log(`Server listening on port ${PORT}`);

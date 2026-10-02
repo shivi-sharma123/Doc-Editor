@@ -1,83 +1,144 @@
-import { useEffect, useRef, useState } from 'react';
-import type { InsertOp, DeleteOp, CRDTChar } from '@crdts/crdt-core';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { CRDTChar, CRDTOperation } from '@crdts/crdt-core';
 
-type CursorMessage = { type: 'cursor', siteId: string, position: { lineNumber: number, column: number } };
+export type SocketStatus = 'connecting' | 'open' | 'closed';
 
+/** Full document state pushed by the relay server right after a socket connects. */
+export interface SyncMessage {
+    type: 'sync';
+    sequence: CRDTChar[];
+    clock?: number;
+}
+
+/** Presence broadcast forwarded between peers without touching document state. */
+export interface CursorMessage {
+    type: 'cursor';
+    siteId: string;
+    name: string;
+    line?: number;
+    column?: number;
+}
+
+/** Every payload the relay server can send to a client. */
+export type ServerMessage = SyncMessage | CursorMessage | CRDTOperation;
+
+export interface UseWebSocketResult {
+    status: SocketStatus;
+    /** Sends a JSON payload. Payloads issued while the socket is down are queued and flushed on reconnect. */
+    send: (payload: unknown) => void;
+}
+
+const MAX_BACKOFF_MS = 5000;
+const BASE_BACKOFF_MS = 500;
+
+/**
+ * Resilient WebSocket connection to the CRDT relay server.
+ *
+ * Automatically reconnects with exponential backoff and keeps an outbox of messages
+ * so local edits are never lost while the connection is down.
+ */
 export function useWebSocket(
-    docId: string | undefined,
-    onRemoteOp: (op: InsertOp | DeleteOp) => void,
-    onSync: (sequence: CRDTChar[]) => void,
-    onCursor: (cursor: CursorMessage) => void
-) {
-    const wsRef = useRef<WebSocket | null>(null);
-    const [connected, setConnected] = useState(false);
+    docId: string,
+    onMessage: (message: ServerMessage) => void
+): UseWebSocketResult {
+    const [status, setStatus] = useState<SocketStatus>('connecting');
 
-    const onRemoteOpRef = useRef(onRemoteOp);
-    const onSyncRef = useRef(onSync);
-    const onCursorRef = useRef(onCursor);
+    const socketRef = useRef<WebSocket | null>(null);
+    const outboxRef = useRef<string[]>([]);
+    const attemptsRef = useRef(0);
+    const closedRef = useRef(false);
+    const onMessageRef = useRef(onMessage);
 
-    // Keep refs fresh
     useEffect(() => {
-        onRemoteOpRef.current = onRemoteOp;
-        onSyncRef.current = onSync;
-        onCursorRef.current = onCursor;
-    }, [onRemoteOp, onSync, onCursor]);
+        onMessageRef.current = onMessage;
+    }, [onMessage]);
 
     useEffect(() => {
         if (!docId) return;
 
-        let reconnectTimeout: ReturnType<typeof setTimeout>;
-        let isUnmounted = false;
-        let attempt = 0;
+        closedRef.current = false;
+        let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
-        function connect() {
-            if (isUnmounted) return;
-            const wsUrl = `ws://localhost:3001/${docId}`;
-            const ws = new WebSocket(wsUrl);
-            wsRef.current = ws;
+        const connect = () => {
+            if (closedRef.current) return;
 
-            ws.onopen = () => {
-                setConnected(true);
-                attempt = 0;
-            };
+            setStatus('connecting');
+            const socket = new WebSocket(getWebSocketUrl(docId));
+            socketRef.current = socket;
 
-            ws.onclose = () => {
-                setConnected(false);
-                if (!isUnmounted) {
-                    const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
-                    attempt++;
-                    reconnectTimeout = setTimeout(connect, delay);
+            socket.onopen = () => {
+                if (closedRef.current) return;
+                attemptsRef.current = 0;
+                setStatus('open');
+
+                const queued = outboxRef.current;
+                outboxRef.current = [];
+                for (const payload of queued) {
+                    socket.send(payload);
                 }
             };
 
-            ws.onerror = () => ws.close();
-
-            ws.onmessage = (event) => {
-                const msg = JSON.parse(event.data);
-                if (msg.type === 'sync') {
-                    onSyncRef.current(msg.sequence);
-                } else if (msg.type === 'insert' || msg.type === 'delete') {
-                    onRemoteOpRef.current(msg);
-                } else if (msg.type === 'cursor') {
-                    onCursorRef.current(msg);
+            socket.onmessage = (event) => {
+                if (closedRef.current) return;
+                try {
+                    onMessageRef.current(JSON.parse(event.data));
+                } catch (err) {
+                    console.error('Failed to parse server message', err);
                 }
             };
-        }
+
+            socket.onclose = () => {
+                if (closedRef.current) return;
+                setStatus('closed');
+                scheduleReconnect();
+            };
+
+            socket.onerror = () => {
+                socket.close();
+            };
+        };
+
+        const scheduleReconnect = () => {
+            if (closedRef.current) return;
+            attemptsRef.current += 1;
+            const delay = Math.min(
+                BASE_BACKOFF_MS * 2 ** (attemptsRef.current - 1),
+                MAX_BACKOFF_MS
+            );
+            reconnectTimer = setTimeout(connect, delay);
+        };
 
         connect();
 
         return () => {
-            isUnmounted = true;
-            clearTimeout(reconnectTimeout);
-            if (wsRef.current) wsRef.current.close();
+            closedRef.current = true;
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            socketRef.current?.close();
+            socketRef.current = null;
         };
     }, [docId]);
 
-    const sendOp = (op: InsertOp | DeleteOp | CursorMessage) => {
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify(op));
+    const send = useCallback((payload: unknown) => {
+        const serialized = JSON.stringify(payload);
+        const socket = socketRef.current;
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(serialized);
+        } else {
+            outboxRef.current.push(serialized);
         }
-    };
+    }, []);
 
-    return { connected, sendOp };
+    return { status, send };
+}
+
+/**
+ * Derives the WebSocket endpoint from the configured HTTP API base so the
+ * client works regardless of the host it was served from.
+ */
+function getWebSocketUrl(docId: string): string {
+    const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
+    const url = new URL(apiBase);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.pathname = `/${docId}`;
+    return url.toString();
 }

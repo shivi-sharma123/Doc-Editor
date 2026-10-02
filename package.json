@@ -4,5 +4,23 @@
   "private": true,
   "workspaces": [
     "packages/*"
-  ]
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm run dev --workspace=packages/server",
+    "dev:client": "npm run dev --workspace=packages/client",
+    "build": "npm run build --workspace=packages/crdt-core && npm run build --workspace=packages/server && npm run build --workspace=packages/client",
+    "test": "npm test --workspace=packages/crdt-core",
+    "lint": "npm run lint --workspace=packages/client",
+    "clean": "node -e \"const fs=require('fs'),p=require('path');const r=n=>fs.rmSync(p.join(__dirname,n),{recursive:true,force:true});['node_modules','data.db','packages/crdt-core/dist','packages/server/dist','packages/client/dist'].forEach(r);console.log('cleaned')\"",
+    "start": "concurrently -n server,client -c blue,magenta \"npm:dev:server\" \"npm:preview:client\"",
+    "preview:client": "npm run preview --workspace=packages/client"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "allowScripts": {
+    "esbuild@0.27.3": true,
+    "sqlite3@6.0.1": true
+  }
 }

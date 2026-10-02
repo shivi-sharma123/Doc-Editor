@@ -79,8 +79,9 @@ crdts/
 │       │       └── useWebSocket.ts   # Resilient WebSocket connection hook
 │       └── package.json
 │
-├── Makefile                 # Development task runner
-└── package.json             # Workspace root 
+├── Makefile                 # Optional task runner (macOS/Linux)
+└── run-Instruction.md       # Step-by-step clone + run guide
+└── package.json             # Workspace root
 ```
 
 ---
@@ -95,19 +96,34 @@ crdts/
 
 Install all monorepo dependencies from the root directory:
 ```bash
-make install
+npm install
 ```
+*(On macOS/Linux you can use `make install` instead.)*
+
+> **Windows note:** `npm` 11+ blocks dependency install scripts by default. This project needs
+> `esbuild` and `sqlite3` to run theirs. The repository already approves them via `allowScripts`
+> in the root `package.json`. If you ever hit a native-module error, run:
+> ```bash
+> npm install-scripts approve esbuild sqlite3
+> npm rebuild sqlite3 esbuild
+> ```
 
 ### Running the Application (Development)
 
 To run both the backend server and frontend client concurrently:
 ```bash
-make dev
+npm run dev
 ```
 - The backend server will start on `http://localhost:3001`
 - The Vite frontend will start on `http://localhost:5173`
 
-*(If you prefer manual execution, you can run `npm run dev --workspace=packages/server` and `npm run dev --workspace=packages/client` in separate terminals).*
+To run them in separate terminals instead:
+```bash
+npm run dev:server     # backend only
+npm run dev:client     # frontend only
+```
+
+*(On macOS/Linux `make dev` is equivalent to `npm run dev`.)*
 
 ### Testing the Collaboration Flow
 1. Open your browser to `http://localhost:5173`.
@@ -128,17 +144,33 @@ The custom CRDT core (`@crdts/crdt-core`) has a comprehensive Jest test suite th
 
 Run the test suite:
 ```bash
-make test
+npm test
 ```
 
 ## 🏗 Building for Production
 
 To compile TypeScript and build the Vite frontend bundle across all workspaces:
 ```bash
-make build
+npm run build
+```
+
+Then serve the compiled output:
+```bash
+npm start
+```
+- Backend (`node packages/server/dist/index.js`) on `http://localhost:3001`
+- Frontend (Vite preview of `packages/client/dist`) on `http://localhost:4173`
+
+## 🎨 Linting
+
+```bash
+npm run lint
 ```
 
 ## 🐛 Troubleshooting
 
 - **Server Connection Refused:** Ensure that the server isn't being blocked by another app on port `3001`.
-- **Unexpected Document States:** The server persists document CRDT operations in `data.db` in the project root. If you want to wipe testing data, run `make clean` or delete the `.db` file, then restart the server.
+- **`SQLITE_CANTOPEN` / `no such table: documents`:** Stop every running instance of the server, then delete `data.db` and restart.
+- **Blank page with "Loading editor…":** Monaco Editor is loaded from a CDN by `@monaco-editor/react`, so the first load needs an internet connection.
+- **Unexpected Document States:** The server persists document CRDT state in `data.db` in the monorepo root. To wipe testing data, run `npm run clean` (or `make clean`) and restart the server.
+
