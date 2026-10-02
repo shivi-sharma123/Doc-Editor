@@ -20,7 +20,7 @@
     "concurrently": "^9.1.2"
   },
   "allowScripts": {
-    "esbuild@0.27.3": true,
-    "sqlite3@6.0.1": true
+    "sqlite3@6.0.1": true,
+    "esbuild@0.28.2": true
   }
 }
